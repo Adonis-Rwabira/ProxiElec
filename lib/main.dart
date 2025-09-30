@@ -2,16 +2,24 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:location/location.dart';
 import 'package:provider/provider.dart';
 import 'package:universe/universe.dart';
 
+import 'data/dummy_point_de_vente_repository.dart';
+import 'domain/point_de_vente_repository.dart';
+import 'domain/service_location.dart';
 import 'service_details_panel.dart';
-import 'service_location.dart';
+import 'splash_screen.dart'; // Importer le nouvel écran
 
 void main() {
   runApp(
-    ChangeNotifierProvider(
-      create: (context) => ThemeProvider(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => ThemeProvider()),
+        Provider<PointDeVenteRepository>(
+            create: (_) => DummyPointDeVenteRepository()),
+      ],
       child: const MyApp(),
     ),
   );
@@ -23,7 +31,8 @@ class ThemeProvider with ChangeNotifier {
   ThemeMode get themeMode => _themeMode;
 
   void toggleTheme() {
-    _themeMode = _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    _themeMode =
+        _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
     notifyListeners();
   }
 }
@@ -36,7 +45,8 @@ class MyApp extends StatelessWidget {
     const Color primarySeedColor = Colors.indigo;
 
     final TextTheme appTextTheme = TextTheme(
-      displayLarge: GoogleFonts.oswald(fontSize: 57, fontWeight: FontWeight.bold),
+      displayLarge:
+          GoogleFonts.oswald(fontSize: 57, fontWeight: FontWeight.bold),
       titleLarge: GoogleFonts.roboto(fontSize: 22, fontWeight: FontWeight.w500),
       bodyMedium: GoogleFonts.openSans(fontSize: 14),
       labelLarge: GoogleFonts.roboto(fontSize: 14, fontWeight: FontWeight.bold),
@@ -52,15 +62,18 @@ class MyApp extends StatelessWidget {
       appBarTheme: AppBarTheme(
         backgroundColor: primarySeedColor,
         foregroundColor: Colors.white,
-        titleTextStyle: GoogleFonts.oswald(fontSize: 24, fontWeight: FontWeight.bold),
+        titleTextStyle:
+            GoogleFonts.oswald(fontSize: 24, fontWeight: FontWeight.bold),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           foregroundColor: Colors.white,
           backgroundColor: primarySeedColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          textStyle: GoogleFonts.roboto(fontSize: 16, fontWeight: FontWeight.w500),
+          textStyle:
+              GoogleFonts.roboto(fontSize: 16, fontWeight: FontWeight.w500),
         ),
       ),
     );
@@ -75,15 +88,18 @@ class MyApp extends StatelessWidget {
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.grey[900],
         foregroundColor: Colors.white,
-        titleTextStyle: GoogleFonts.oswald(fontSize: 24, fontWeight: FontWeight.bold),
+        titleTextStyle:
+            GoogleFonts.oswald(fontSize: 24, fontWeight: FontWeight.bold),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           foregroundColor: Colors.white,
           backgroundColor: primarySeedColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          textStyle: GoogleFonts.roboto(fontSize: 16, fontWeight: FontWeight.w500),
+          textStyle:
+              GoogleFonts.roboto(fontSize: 16, fontWeight: FontWeight.w500),
         ),
       ),
     );
@@ -95,7 +111,7 @@ class MyApp extends StatelessWidget {
           theme: lightTheme,
           darkTheme: darkTheme,
           themeMode: themeProvider.themeMode,
-          home: const HomeScreen(),
+          home: const SplashScreen(), // MODIFIÉ ICI
           debugShowCheckedModeBanner: false,
         );
       },
@@ -110,87 +126,148 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+
 class _HomeScreenState extends State<HomeScreen> {
   final MapController _mapController = MapController();
-  Timer? _debounce;
-  
-  List<ServiceLocation> _searchResults = [];
-  ServiceLocation? _selectedSearchResult;
+  final Location _location = Location();
 
+  List<double> _mapCenter = [-1.675, 29.229];
+  double _mapZoom = 15.0;
+  bool _isDefaultView = true;
+
+  Timer? _debounce;
+  List<ServiceLocation> _searchResults = [];
   final Set<ServiceType> _selectedServiceTypes = Set.from(ServiceType.values);
   bool _isSearchPanelVisible = false;
 
-  final List<ServiceLocation> _dummyData = [
-    ServiceLocation(
-      name: 'ENEO Agence Les Volcans',
-      address: 'Avenue des Volcans, Goma',
-      type: ServiceType.agency,
-      coordinates: [-1.678, 29.231],
-    ),
-    ServiceLocation(
-      name: 'Borne de recharge KivuWatt',
-      address: 'Près du lac Kivu, Goma',
-      type: ServiceType.chargingStation,
-      coordinates: [-1.685, 29.225],
-    ),
-    ServiceLocation(
-      name: 'Kiosque prépayé Birere',
-      address: 'Marché de Birere, Goma',
-      type: ServiceType.kiosk,
-      coordinates: [-1.669, 29.235],
-    ),
-  ];
+  late Future<List<ServiceLocation>> _serviceLocationsFuture;
 
-  List<ServiceLocation> get _filteredData {
-    if (_selectedSearchResult != null) {
-      return [_selectedSearchResult!];
-    }
-    return _dummyData.where((service) {
-      final bool matchesFilter = _selectedServiceTypes.contains(service.type);
-      return matchesFilter;
-    }).toList();
+  @override
+  void initState() {
+    super.initState();
+    _loadServiceLocations();
+    _initLocation();
   }
 
-  void _onSearchChanged(String query) {
-    if (_debounce?.isActive ?? false) _debounce!.cancel();
-    _debounce = Timer(const Duration(milliseconds: 500), () {
-      setState(() {
-        if (query.isEmpty) {
-          _searchResults = [];
-        } else {
-          _searchResults = _dummyData.where((service) {
-            return service.name.toLowerCase().contains(query.toLowerCase());
-          }).toList();
-        }
-      });
-    });
+  void _loadServiceLocations() {
+    final repository =
+        Provider.of<PointDeVenteRepository>(context, listen: false);
+    _serviceLocationsFuture = repository.getPoints();
   }
 
-  void _navigateToLocation(ServiceLocation location) {
-    setState(() {
-      _selectedSearchResult = location;
-      _isSearchPanelVisible = false;
-      _searchResults = [];
-      FocusScope.of(context).unfocus(); // Dismiss keyboard
-    });
-    _mapController.move(location.coordinates, zoom: 15.0);
-  }
+  Future<void> _initLocation() async {
+    bool serviceEnabled;
+    PermissionStatus permissionGranted;
 
-  void _toggleServiceType(ServiceType type) {
-    setState(() {
-      _selectedSearchResult = null;
-      if (_selectedServiceTypes.contains(type)) {
-        _selectedServiceTypes.remove(type);
-      } else {
-        _selectedServiceTypes.add(type);
+    serviceEnabled = await _location.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await _location.requestService();
+      if (!serviceEnabled) {
+        return;
       }
-    });
+    }
+
+    permissionGranted = await _location.hasPermission();
+    if (permissionGranted == PermissionStatus.denied) {
+      permissionGranted = await _location.requestPermission();
+      if (permissionGranted != PermissionStatus.granted) {
+        return;
+      }
+    }
+
+    final locationData = await _location.getLocation();
+    if (locationData.latitude != null && locationData.longitude != null) {
+      final userLocation = [locationData.latitude!, locationData.longitude!];
+      _mapController.move(userLocation, zoom: 15.0);
+      if (mounted) {
+        setState(() {
+          _mapCenter = userLocation;
+          _mapZoom = 15.0;
+        });
+      }
+    }
+  }
+
+  void _recenterOnUser() async {
+    final locationData = await _location.getLocation();
+    if (locationData.latitude != null && locationData.longitude != null) {
+      final userLocation = [locationData.latitude!, locationData.longitude!];
+      _mapController.move(userLocation, zoom: 15.0);
+      if (mounted) {
+        setState(() {
+          _isDefaultView = true;
+          _mapCenter = userLocation;
+          _mapZoom = 15.0;
+        });
+      }
+    }
+  }
+
+  void _resetView(List<ServiceLocation> locations) {
+    if (locations.isEmpty) return;
+
+    final bounds = locations.fold<List<List<double>>>(
+      [],
+      (acc, loc) => acc..add(loc.coordinates),
+    );
+
+    _mapController.fitBounds(
+      bounds,
+      FitBoundsOptions(padding: const EdgeInsets.all(50.0)),
+    );
+
+    if (mounted) {
+      setState(() {
+        _isDefaultView = true;
+      });
+    }
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _mapController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged(String query, List<ServiceLocation> allLocations) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        setState(() {
+          if (query.isEmpty) {
+            _searchResults = [];
+          } else {
+            _searchResults = allLocations
+                .where((service) =>
+                    service.name.toLowerCase().contains(query.toLowerCase()))
+                .toList();
+          }
+        });
+      }
+    });
+  }
+
+  void _navigateToLocation(ServiceLocation location) {
+    if (mounted) {
+      setState(() {
+        _isSearchPanelVisible = false;
+        _searchResults = [];
+        _isDefaultView = false;
+        FocusScope.of(context).unfocus();
+      });
+    }
+    _mapController.move(location.coordinates, zoom: 17.0);
+  }
+
+  void _toggleServiceType(ServiceType type) {
+    if (mounted) {
+      setState(() {
+        _selectedServiceTypes.contains(type)
+            ? _selectedServiceTypes.remove(type)
+            : _selectedServiceTypes.add(type);
+      });
+    }
   }
 
   @override
@@ -214,118 +291,169 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Rechercher et Filtrer',
           ),
           IconButton(
-            icon: Icon(themeProvider.themeMode == ThemeMode.dark ? Icons.light_mode : Icons.dark_mode),
+            icon: Icon(themeProvider.themeMode == ThemeMode.dark
+                ? Icons.light_mode
+                : Icons.dark_mode),
             onPressed: () => themeProvider.toggleTheme(),
             tooltip: 'Changer le thème',
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          GestureDetector(
-            onTap: () {
-              FocusScope.of(context).unfocus();
-              setState(() {
-                _searchResults = [];
-              });
-            },
-            child: MapScreen(
-              mapController: _mapController,
-              serviceLocations: _filteredData,
-            ),
-          ),
-          
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-            top: _isSearchPanelVisible ? 0 : -300, 
-            left: 0,
-            right: 0,
-            child: Material(
-              elevation: 4.0,
-              child: Container(
-                padding: const EdgeInsets.all(12.0).copyWith(top: MediaQuery.of(context).padding.top + 12),
-                color: Theme.of(context).appBarTheme.backgroundColor,
+      body: FutureBuilder<List<ServiceLocation>>(
+        future: _serviceLocationsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Erreur: ${snapshot.error}'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text('Aucun point de service trouvé.'));
+          }
+
+          final allLocations = snapshot.data!;
+          final filteredLocations = allLocations
+              .where((service) => _selectedServiceTypes.contains(service.type))
+              .toList();
+
+          return Stack(
+            children: [
+              MapScreen(
+                controller: _mapController,
+                serviceLocations: filteredLocations,
+                center: _mapCenter,
+                zoom: _mapZoom,
+                onChanged: (LatLng? center, double? zoom, double? rotation) {
+                  if (mounted) {
+                    setState(() {
+                      _isDefaultView = false;
+                      if (center != null) {
+                        _mapCenter = [center.lat, center.lng];
+                      }
+                      if (zoom != null) {
+                        _mapZoom = zoom;
+                      }
+                    });
+                  }
+                },
+              ),
+              Positioned(
+                bottom: 20,
+                right: 20,
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    TextField(
-                      onChanged: _onSearchChanged,
-                      decoration: InputDecoration(
-                        hintText: 'Rechercher un nom de service...',
-                        prefixIcon: const Icon(Icons.search),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8.0),
-                          borderSide: BorderSide.none,
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).scaffoldBackgroundColor,
+                    if (!_isDefaultView) ...[
+                      FloatingActionButton(
+                        mini: true,
+                        onPressed: () => _resetView(filteredLocations),
+                        tooltip: 'Vue d\'ensemble',
+                        child: const Icon(Icons.aspect_ratio),
                       ),
-                    ),
-                    const SizedBox(height: 12.0),
-                    Wrap(
-                      spacing: 8.0,
-                      runSpacing: 4.0,
-                      children: ServiceType.values.map((type) {
-                        final bool isSelected = _selectedServiceTypes.contains(type);
-                        return FilterChip(
-                          avatar: Icon(
-                            _getServiceTypeIcon(type),
-                            color: isSelected 
-                                ? Theme.of(context).colorScheme.onPrimary 
-                                : Theme.of(context).colorScheme.onSurface,
-                          ),
-                          label: Text(_getServiceTypeName(type)),
-                          selected: isSelected,
-                          onSelected: (selected) => _toggleServiceType(type),
-                          selectedColor: Theme.of(context).colorScheme.primary,
-                          backgroundColor: Theme.of(context).colorScheme.surface,
-                          labelStyle: TextStyle(
-                            color: isSelected 
-                                ? Theme.of(context).colorScheme.onPrimary
-                                : Theme.of(context).colorScheme.onSurface,
-                          ),
-                          showCheckmark: false,
-                        );
-                      }).toList(),
+                      const SizedBox(height: 10),
+                    ],
+                    FloatingActionButton(
+                      onPressed: _recenterOnUser,
+                      tooltip: 'Ma position',
+                      child: const Icon(Icons.my_location),
                     ),
                   ],
                 ),
               ),
-            ),
-          ),
-          
-          if (_searchResults.isNotEmpty)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 150, 
-              left: 12,
-              right: 12,
-              child: Material(
-                elevation: 4.0,
-                borderRadius: BorderRadius.circular(8.0),
-                child: Container(
-                  constraints: BoxConstraints(
-                    maxHeight: 200, 
-                  ),
-                  child: ListView.builder(
-                    padding: EdgeInsets.zero,
-                    shrinkWrap: true,
-                    itemCount: _searchResults.length,
-                    itemBuilder: (context, index) {
-                      final service = _searchResults[index];
-                      return ListTile(
-                        title: Text(service.name),
-                        subtitle: Text(service.address),
-                        onTap: () {
-                          _navigateToLocation(service);
-                        },
-                      );
-                    },
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                top: _isSearchPanelVisible ? 0 : -300,
+                left: 0,
+                right: 0,
+                child: Material(
+                  elevation: 4.0,
+                  child: Container(
+                    padding: const EdgeInsets.all(12.0)
+                        .copyWith(top: MediaQuery.of(context).padding.top + 12),
+                    color: Theme.of(context).appBarTheme.backgroundColor,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
+                          onChanged: (query) =>
+                              _onSearchChanged(query, allLocations),
+                          decoration: InputDecoration(
+                            hintText: 'Rechercher un nom de service...',
+                            prefixIcon: const Icon(Icons.search),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                              borderSide: BorderSide.none,
+                            ),
+                            filled: true,
+                            fillColor:
+                                Theme.of(context).scaffoldBackgroundColor,
+                          ),
+                        ),
+                        const SizedBox(height: 12.0),
+                        Wrap(
+                          spacing: 8.0,
+                          runSpacing: 4.0,
+                          children: ServiceType.values.map((type) {
+                            final bool isSelected =
+                                _selectedServiceTypes.contains(type);
+                            return FilterChip(
+                              avatar: Icon(
+                                _getServiceTypeIcon(type),
+                                color: isSelected
+                                    ? Theme.of(context).colorScheme.onPrimary
+                                    : Theme.of(context).colorScheme.onSurface,
+                              ),
+                              label: Text(_getServiceTypeName(type)),
+                              selected: isSelected,
+                              onSelected: (selected) => _toggleServiceType(type),
+                              selectedColor:
+                                  Theme.of(context).colorScheme.primary,
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.surface,
+                              labelStyle: TextStyle(
+                                color: isSelected
+                                    ? Theme.of(context).colorScheme.onPrimary
+                                    : Theme.of(context).colorScheme.onSurface,
+                              ),
+                              showCheckmark: false,
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+              if (_searchResults.isNotEmpty)
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 150,
+                  left: 12,
+                  right: 12,
+                  child: Material(
+                    elevation: 4.0,
+                    borderRadius: BorderRadius.circular(8.0),
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        maxHeight: 200,
+                      ),
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        shrinkWrap: true,
+                        itemCount: _searchResults.length,
+                        itemBuilder: (context, index) {
+                          final service = _searchResults[index];
+                          return ListTile(
+                            title: Text(service.name),
+                            subtitle: Text(service.address),
+                            onTap: () => _navigateToLocation(service),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -355,35 +483,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class MapScreen extends StatelessWidget {
   final List<ServiceLocation> serviceLocations;
-  final MapController mapController;
+  final List<double> center;
+  final double zoom;
+  final MapController controller;
+  final Function(LatLng?, double?, double)? onChanged;
 
   const MapScreen({
-    super.key, 
+    super.key,
     required this.serviceLocations,
-    required this.mapController,
+    required this.center,
+    required this.zoom,
+    required this.controller,
+    required this.onChanged,
   });
 
   void _onMarkerTapped(BuildContext context, ServiceLocation service) {
+    controller.move(service.coordinates, zoom: 17.0);
     FocusScope.of(context).unfocus();
-    
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => GestureDetector(
-        onTap: () {
-          Navigator.of(context).pop();
-        },
-        child: DraggableScrollableSheet(
+      builder: (context) {
+        return DraggableScrollableSheet(
           initialChildSize: 0.4,
           minChildSize: 0.2,
           maxChildSize: 0.75,
-          builder: (_, controller) => ServiceDetailsPanel(
-            service: service, 
-            scrollController: controller,
+          builder: (_, scrollController) => ServiceDetailsPanel(
+            service: service,
+            scrollController: scrollController,
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -412,16 +544,14 @@ class MapScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return U.GoogleMap(
-      center: "Goma",
-      zoom: 12.0,
-      controller: mapController,
-      base: U.TileLayer(
-        'http://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
-        subdomains: ['mt0','mt1','mt2','mt3'],
-        attribution: 'Map Data &copy; Google',
-        updateInterval: 100,
-        maxZoom: 20,
-        minZoom: 0,
+      center: center,
+      zoom: zoom,
+      controller: controller,
+      onChanged: onChanged,
+      base : U.TileLayer(
+          'http://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+          subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+          attribution: 'Map Data &copy; Google',
       ),
       markers: U.MarkerLayer(
         serviceLocations.map((service) {
@@ -430,8 +560,7 @@ class MapScreen extends StatelessWidget {
             widget: GestureDetector(
               onTap: () => _onMarkerTapped(context, service),
               child: Icon(
-                _getMarkerIconData(service.type),
-                color: _getMarkerColor(service.type),
+                _getMarkerIconData(service.type),                  color: _getMarkerColor(service.type),
                 size: 40,
               ),
             ),

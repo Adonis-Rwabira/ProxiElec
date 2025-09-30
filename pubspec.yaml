@@ -39,6 +39,7 @@ dependencies:
   url_launcher: ^6.3.2
   latlong2: ^0.9.1
   universe: ^2.0.1
+  location: ^6.0.2
 
 dev_dependencies:
   flutter_test:

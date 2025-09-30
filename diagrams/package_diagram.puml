@@ -1,0 +1,56 @@
+@startuml
+' --- Configuration Globale du Style (Inspiré de WTE) ---
+skinparam shadowing true
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+skinparam roundcorner 10
+
+' --- Style des Packages ---
+skinparam package {
+    FontColor #333333
+    BorderColor #6D6875
+    FontSize 14
+    StereotypeFontSize 12
+}
+
+' --- Définition des Packages de l'Application ---
+rectangle "Application ProxiElec" {
+    package "Presentation Layer (UI)" as Presentation #LightSkyBlue {
+        [main.dart]
+        [service_details_panel.dart]
+    }
+
+    package "Domain Layer (Contracts & Entities)" as Domain #Wheat {
+        [point_de_vente_repository.dart]
+        [service_location.dart]
+    }
+
+    package "Data Layer (Implementation)" as Data #Pink {
+        [dummy_point_de_vente_repository.dart]
+    }
+}
+
+
+' --- Définition des Packages Externes (Dépendances) ---
+package "External Dependencies" as Externals {
+    [Flutter SDK]
+    [provider]
+    [universe]
+    [location]
+    [google_fonts]
+}
+
+' --- Relations entre les couches de l'application ---
+Presentation ..> Domain : "utilise les contrats et entités"
+Data ..|> Domain : "implémente les contrats"
+Presentation ..> Data : "<<dépendance implicite via Provider>>"
+
+' --- Relations avec les dépendances externes ---
+Presentation --> [Flutter SDK]
+Presentation --> [provider]
+Presentation --> [universe]
+Presentation --> [location]
+Presentation --> [google_fonts]
+
+@enduml

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'service_location.dart';
+import 'domain/service_location.dart';
 
 class ServiceDetailsPanel extends StatelessWidget {
   final ServiceLocation service;
